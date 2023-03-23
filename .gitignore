@@ -23,4 +23,5 @@ node_modules/
 #//////////////////////////
 .idea/
 **/*.meta
-assets/NoUi3
+# assets/NoUi3
+assets/cc_editor
