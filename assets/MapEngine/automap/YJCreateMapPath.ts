@@ -1,92 +1,38 @@
-import { _decorator, Component, Node, Layers, UITransform, Sprite, math } from 'cc';
+import { math } from 'cc';
+import { _decorator, Component, Node } from 'cc';
+import { TileInfo, TilePos, TilePosEqual } from '../../MapEngine/component/CreateMapObjectBase';
+import { PathInfo } from '../../MapEngine/component/CreatePath';
+import { YJCreateMapLandform } from './YJCreateMapLandform';
 import { no } from '../../NoUi3/no';
-import { CreateLandform } from './CreateLandform';
-import { Tile, TileShapeEnum } from './Tile';
-import { Range, UV } from '../../NoUi3/types'
-import { TileInfo, TilePos, TilePosEqual } from './CreateMapObjectBase';
-const { ccclass, property, executeInEditMode } = _decorator;
+import { UV } from '../../NoUi3/types';
+const { ccclass, property } = _decorator;
 
+@ccclass('YJCreateMapPath')
+export class YJCreateMapPath extends YJCreateMapLandform {
 
-@ccclass('PathInfo')
-export class PathInfo {
-    @property({ type: UV, displayName: '起点' })
-    start: UV = new UV();
-    @property({ type: UV, displayName: '终点' })
-    end: UV = new UV();
-    @property({ type: Range, displayName: '转角个数范围' })
-    turnNumRange: Range = new Range();
-
-    public uuid: string;
-
-    public constructor(start?: number[], end?: number[], turnNumRange?: number[]) {
-        start = start || [0, 0];
-        end = end || [0, 0];
-        turnNumRange = turnNumRange || [0, 0];
-        this.start = new UV(start[0], start[1]);
-        this.end = new UV(end[0], end[1]);
-        this.turnNumRange = new Range(turnNumRange[0], turnNumRange[1]);
-        this.uuid = no.uuid();
-    }
-
-    public get config(): any {
-        return {
-            start: [this.start.u, this.start.v],
-            end: [this.end.u, this.end.v],
-            turnNumRange: [this.turnNumRange.min, this.turnNumRange.max]
-        };
-    }
-
-    public get turnNum(): number {
-        const a = this.turnNumRange.randomValue;
-        // console.log(a);
-        return a;
-    }
-
-}
-
-//创建路径轨迹
-@ccclass('CreatePath')
-@executeInEditMode()
-export class CreatePath extends CreateLandform {
-    @property({ override: true, type: Range, displayName: '地砖间隔区间', tooltip: '两块地砖之间最小间隔格子数', visible() { return false; } })
-    density: Range = new Range();
-    @property({ type: PathInfo, displayName: '路径' })
-    pathInfos: PathInfo[] = [];
-    @property({ displayName: '障碍地形节点', type: Node })
-    obstacleContainer: Node = null;
-
+    private pathInfos: PathInfo[] = [];
     protected _dirTiles: { [k: string]: TileInfo };
     protected _validGridPos: TilePos[];
     protected tileDir: { [k: string]: string };
-
-    public get config(): any {
-        let a = super.config;
-        a.isPath = true;
-        let pathes: any[] = [];
-        this.pathInfos.forEach(p => {
-            pathes[pathes.length] = p.config;
-        });
-        a.pathes = pathes;
-        if (this.obstacleContainer)
-            a.obstacleContainer = this.obstacleContainer.name;
-        return a;
-    }
+    protected obstacleContainer: YJCreateMapLandform;
+    /**所有路线的点 */
+    public allPathPoints: { [k: string]: TilePos[] };
 
     public setConfig(v: any) {
         super.setConfig(v);
         v.pathes?.forEach((p: any) => {
             this.pathInfos[this.pathInfos.length] = new PathInfo(p.start, p.end, p.turnNumRange);
         });
-        this.node.active = v.isEnable;
         if (v.obstacleContainer)
-            this.obstacleContainer = no.getNodeInParents(this.node, v.obstacleContainer);
+            this.obstacleContainer = no.getNodeInParents(this.node, v.obstacleContainer)?.getComponent(YJCreateMapLandform);
     }
 
     protected initDirTiles() {
         this._dirTiles = {};
         this.tileInfos.forEach(tileInfo => {
-            const tile = tileInfo.tileNode.getComponent(Tile);
-            this._dirTiles[tile.dirs()] = tileInfo;
+            const tile = tileInfo.tileConfig;
+            if (tile.dirs)
+                this._dirTiles[tile.dirs] = tileInfo;
         });
     }
 
@@ -102,9 +48,11 @@ export class CreatePath extends CreateLandform {
 
     protected async pavePathes() {
         this.tileDir = {};
+        this.allPathPoints = {};
         for (let i = 0, n = this.pathInfos.length; i < n; i++) {
             const info = this.pathInfos[i];
             await this.createPath(info);
+            await no.sleep(0.05);
         }
     }
 
@@ -112,10 +60,13 @@ export class CreatePath extends CreateLandform {
         let turnPos = this.getTurnPoint(pathInfo.turnNum);
         turnPos = [].concat(this.getPos(pathInfo.start), turnPos, this.getPos(pathInfo.end));
         const pos = this.getAllPointsPath(turnPos);
+        this.allPathPoints[pathInfo.uuid] = pos;
         for (let i = 0, n = pos.length; i < n; i++) {
-            const p = pos[i];
-            this.createGrid(p, this._dirTiles[this.tileDir[`${p.u}-${p.v}`]]);
-            await no.sleep(.05);
+            const p = pos[i], uv = `${p.u}-${p.v}`, dir = this.tileDir[uv], tileInfo = this._dirTiles[dir];
+            // if (!tileInfo)
+            no.log('createPath', uv, dir);
+            this.createGrid(p, tileInfo);
+            // await no.sleep(.1);
         }
     }
 
@@ -137,7 +88,7 @@ export class CreatePath extends CreateLandform {
             addStepU = uSteps == 0 ? false : (vSteps == 0 ? true : no.randomBetween(0, 10) <= 5),
             path: TilePos[] = [],
             obstaclePos: TilePos;
-        if (this.obstacleContainer?.getComponent(CreateLandform).isUsed(p1)) {
+        if (this.obstacleContainer?.isUsed(p1)) {
             //遇到障碍
             const bypassPoint = this.getBypassObstaclePoint(p0, addStepU) || this.getBypassObstaclePoint(p1, addStepU);
             if (!bypassPoint) return path;
@@ -150,7 +101,7 @@ export class CreatePath extends CreateLandform {
                 v = addStepU ? curV : curV + vSub,
                 pos = this.getPos(u, v),
                 lastPos = path[path.length - 1];
-            if (TilePosEqual(pos, p2) && this.obstacleContainer?.getComponent(CreateLandform).isUsed(pos)) {
+            if (TilePosEqual(pos, p2) && this.obstacleContainer?.isUsed(pos)) {
                 this.checkDir(lastPos, path[path.length - 2] || p0, pos);
                 break;
             }
@@ -161,7 +112,7 @@ export class CreatePath extends CreateLandform {
                 pos = this.getPos(u, v);
                 if (!pos) break;
             }
-            if (this.obstacleContainer?.getComponent(CreateLandform).isUsed(pos)) {
+            if (this.obstacleContainer?.isUsed(pos)) {
                 //遇到障碍
                 obstaclePos = lastPos;
                 break;
@@ -200,12 +151,12 @@ export class CreatePath extends CreateLandform {
         while (true) {
             try1++;
             pos1 = this.getPos(obstaclePos.u + uSub * try1, obstaclePos.v + vSub * try1);
-            if (!pos1 || !this.obstacleContainer?.getComponent(CreateLandform).isUsed(pos1)) break;
+            if (!pos1 || !this.obstacleContainer?.isUsed(pos1)) break;
         }
         while (true) {
             try2++;
             pos2 = this.getPos(obstaclePos.u - uSub * try2, obstaclePos.v - vSub * try2);
-            if (!pos2 || !this.obstacleContainer?.getComponent(CreateLandform).isUsed(pos2)) break;
+            if (!pos2 || !this.obstacleContainer?.isUsed(pos2)) break;
         }
         if (!pos1 && !pos2) return null;
         if (!pos1 && pos2) return pos2;
@@ -244,6 +195,7 @@ export class CreatePath extends CreateLandform {
     private getAllPointsPath(points: TilePos[]): TilePos[] {
         let allPath: TilePos[] = [];
         for (let i = 0, n = points.length; i < n - 1; i++) {
+            if (!points[i] || !points[i + 1]) continue;
             let path = this.getTowPointPath(points[i], points[i + 1], allPath[allPath.length - 2]);
             if (allPath.length > 0) path.shift();
             allPath = allPath.concat(path);
@@ -251,45 +203,17 @@ export class CreatePath extends CreateLandform {
         return allPath;
     }
 
-    protected async pave() {
+
+    public async pave() {
+        await this.tilePrefab.loadPrefab();
         this.initDirTiles();
         this.setValidGridPos();
         if (this.container.uuid == this.node.uuid)
             this.container.removeAllChildren();
         await this.pavePathes();
-        this.scheduleOnce(() => {
-            this.container.children.sort((a, b) => {
-                return b.position.y - a.position.y;
-            });
-        }, 0.1);
-    }
-
-    protected createGrid(pos: TilePos, tileInfo?: TileInfo) {
-        const name = `${pos.u}_${pos.v}`;
-        let node = this.container.getChildByName(name);
-        if (!tileInfo) {
-            const idx = no.weightRandomObject(this.tileInfos, 'weight');
-            tileInfo = this.tileInfos[idx];
-        }
-
-        if (!node) {
-            node = new Node(name);
-            node.layer = Layers.Enum.UI_2D;
-            node.addComponent(UITransform).setContentSize(this.gridSize);
-            node.setPosition(pos.x, pos.y);
-            node.parent = this.container;
-        }
-
-        if (this.shape == TileShapeEnum.Square) {
-            const sprite = node.addComponent(Sprite);
-            sprite.sizeMode = Sprite.SizeMode.CUSTOM;
-            sprite.type = Sprite.Type.SLICED;
-            sprite.spriteFrame = this._gridSpriteFrame;
-        }
-        const tile = tileInfo.tileNode.getComponent(Tile);
-        this.setTile(node, tile);
-        this.setGridUV(node, pos);
-        this.useGrid(pos);
+        this.container.children.sort((a, b) => {
+            return b.position.y - a.position.y;
+        });
     }
 
     private getPos(uv: UV): TilePos | null;
